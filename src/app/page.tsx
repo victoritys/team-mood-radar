@@ -26,45 +26,60 @@ export default function Home() {
   const [userMood, setUserMood] = useState<number | null>(null);
 
   useEffect(() => {
-    // Check if user came from an invite link
-    if (typeof window !== "undefined") {
-      const searchParams = new URLSearchParams(window.location.search);
-      const teamFromUrl = searchParams.get('team');
-      
-      if (teamFromUrl) {
-        localStorage.setItem("mood_team_id", teamFromUrl);
-        localStorage.setItem("mood_is_creator", "false");
-        setTeamId(teamFromUrl);
-        setIsCreator(false);
-        // Clean URL after joining so the query param doesn't linger
-        window.history.replaceState({}, document.title, window.location.pathname);
-      } else {
-        const storedTeamId = localStorage.getItem("mood_team_id");
-        const storedIsCreator = localStorage.getItem("mood_is_creator");
-        if (storedTeamId) {
-          setTeamId(storedTeamId);
-          setIsCreator(storedIsCreator === "true");
+    const initialize = async () => {
+      let sessionId = typeof window !== "undefined" ? localStorage.getItem("mood_session_id") : null;
+      if (!sessionId) {
+        sessionId = Math.random().toString(36).substring(2, 15);
+        localStorage.setItem("mood_session_id", sessionId);
+      }
+
+      let resolvedTeamId = null;
+
+      if (typeof window !== "undefined") {
+        try {
+          const searchParams = new URLSearchParams(window.location.search);
+          const inviteFromUrl = searchParams.get('invite');
+          
+          if (inviteFromUrl) {
+            const { data, error } = await supabase.from('teams').select('name, admin_secret').eq('invite_code', inviteFromUrl).maybeSingle();
+            if (data && data.name) {
+              const mySecret = localStorage.getItem("mood_admin_secret");
+              const isActuallyCreator = !!(mySecret && mySecret === data.admin_secret);
+
+              localStorage.setItem("mood_team_id", data.name);
+              localStorage.setItem("mood_is_creator", isActuallyCreator ? "true" : "false");
+              setTeamId(data.name);
+              setIsCreator(isActuallyCreator);
+              resolvedTeamId = data.name;
+            } else {
+              alert("This invite link is invalid or has expired.");
+            }
+            window.history.replaceState({}, document.title, window.location.pathname);
+          } else {
+            const storedTeamId = localStorage.getItem("mood_team_id");
+            const storedIsCreator = localStorage.getItem("mood_is_creator");
+            if (storedTeamId) {
+              setTeamId(storedTeamId);
+              setIsCreator(storedIsCreator === "true");
+              resolvedTeamId = storedTeamId;
+            }
+          }
+        } catch (e) {
+          console.error("URL parse error", e);
         }
       }
-    }
 
-    const sessionId = localStorage.getItem("mood_session_id");
-    if (!sessionId) {
-      localStorage.setItem("mood_session_id", Math.random().toString(36).substring(2, 15));
-    }
+      if (resolvedTeamId) {
+        await fetchDashboardData(viewDate, resolvedTeamId);
+      } else {
+        setLoading(false);
+      }
+    };
 
-    const lastSubmission = localStorage.getItem("last_mood_submission");
-    const today = new Date().toISOString().split('T')[0];
-
-    if (lastSubmission === today) {
-      setHasSubmitted(true);
-      fetchDashboardData();
-    } else {
-      setLoading(false);
-    }
+    initialize();
   }, []);
 
-  const fetchDashboardData = async (date?: Date) => {
+  const fetchDashboardData = async (date?: Date, explicitTeamId?: string | null) => {
     const targetDate = date || viewDate;
     setLoading(true);
     try {
@@ -73,7 +88,7 @@ export default function Home() {
       const endOfDay = new Date(targetDate);
       endOfDay.setHours(23, 59, 59, 999);
 
-      const currentTeamId = typeof window !== 'undefined' ? localStorage.getItem("mood_team_id") : null;
+      const currentTeamId = explicitTeamId || (typeof window !== 'undefined' ? localStorage.getItem("mood_team_id") : null);
       if (!currentTeamId) {
         setLoading(false);
         return;
@@ -108,7 +123,16 @@ export default function Home() {
       }
 
       if (userError) console.warn("Note: Error fetching specific user mood:", userError);
-      setUserMood(userData?.mood ?? null);
+      
+      const foundMood = userData?.mood ?? null;
+      setUserMood(foundMood);
+
+      // Only set hasSubmitted based on today's DB record for THIS specific team
+      const todayStr = new Date().toISOString().split('T')[0];
+      const targetDateStr = targetDate.toISOString().split('T')[0];
+      if (targetDateStr === todayStr) {
+        setHasSubmitted(foundMood !== null);
+      }
 
       if (dayError) throw dayError;
 
@@ -205,15 +229,20 @@ export default function Home() {
         team_id: currentTeamId
       });
 
-      if (dbError) throw dbError;
+      if (dbError) {
+        console.error("DB Error details:", dbError);
+        alert(`Failed to save check-in to database: ${dbError.message}`);
+        throw dbError;
+      }
 
-      const today = new Date().toISOString().split('T')[0];
-      localStorage.setItem("last_mood_submission", today);
+      const todayStr = new Date().toISOString().split('T')[0];
+      localStorage.setItem("last_mood_submission", todayStr);
       
       setHasSubmitted(true);
-      await fetchDashboardData();
-    } catch (err) {
+      await fetchDashboardData(viewDate, currentTeamId);
+    } catch (err: any) {
       console.error("Failed to submit mood", err);
+      alert("Failed to submit check-in! Check console.");
       setLoading(false);
     }
   };
@@ -231,13 +260,27 @@ export default function Home() {
     setHasSubmitted(!isLocked);
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
+    setLoading(true);
+    const today = new Date();
+    setViewDate(today);
+    await fetchDashboardData(today);
     setHasSubmitted(false);
-    // Fetch data for the viewDate just in case to sync userMood
-    fetchDashboardData(viewDate);
+    setLoading(false);
   };
 
-  const handleSaveTeam = (newTeam: string) => {
+  const handleSaveTeam = async (newTeam: string) => {
+    const adminSecret = localStorage.getItem("mood_admin_secret");
+    if (adminSecret && newTeam !== teamId) {
+      setLoading(true);
+      const { error } = await supabase.from('teams').update({ name: newTeam }).eq('admin_secret', adminSecret);
+      if (error) {
+        alert("This team name might already be taken by someone else.");
+        setLoading(false);
+        return;
+      }
+    }
+
     localStorage.setItem("mood_team_id", newTeam);
     setTeamId(newTeam);
     // Reload to guarantee all state/history drops its current team context
@@ -247,8 +290,68 @@ export default function Home() {
   const handleLeaveTeam = () => {
     localStorage.removeItem("mood_team_id");
     localStorage.removeItem("mood_is_creator");
+    localStorage.removeItem("mood_invite_code");
+    localStorage.removeItem("mood_admin_secret");
     setTeamId(null);
     setIsCreator(false);
+  };
+
+  const handleCreateTeam = async (name: string) => {
+    setLoading(true);
+    try {
+      // Check if team already exists
+      const { data: existingTeam } = await supabase.from('teams').select('id, admin_secret, invite_code').eq('name', name).maybeSingle();
+      
+      if (existingTeam) {
+        // Check if we are the creator who previously logged out
+        const savedSecrets = JSON.parse(localStorage.getItem("mood_admin_secrets") || "{}");
+        if (savedSecrets[name] === existingTeam.admin_secret) {
+          // Restore admin session
+          localStorage.setItem("mood_team_id", name);
+          localStorage.setItem("mood_is_creator", "true");
+          localStorage.setItem("mood_admin_secret", existingTeam.admin_secret);
+          localStorage.setItem("mood_invite_code", existingTeam.invite_code);
+          
+          setTeamId(name);
+          setIsCreator(true);
+          if (hasSubmitted) fetchDashboardData();
+          setLoading(false);
+          return;
+        }
+        
+        alert("This team name is already taken! Please ask the creator for an invite link, or choose a different name.");
+        setLoading(false);
+        return;
+      }
+
+      // Create new team securely
+      const inviteCode = Math.random().toString(36).substring(2, 10);
+      const { data: newTeam, error } = await supabase
+        .from('teams')
+        .insert([{ name, invite_code: inviteCode }])
+        .select('admin_secret, invite_code')
+        .single();
+        
+      if (error) throw error;
+
+      // Remember that we own this team in case we log out
+      const savedSecrets = JSON.parse(localStorage.getItem("mood_admin_secrets") || "{}");
+      savedSecrets[name] = newTeam.admin_secret;
+      localStorage.setItem("mood_admin_secrets", JSON.stringify(savedSecrets));
+
+      localStorage.setItem("mood_team_id", name);
+      localStorage.setItem("mood_is_creator", "true");
+      localStorage.setItem("mood_invite_code", newTeam.invite_code);
+      localStorage.setItem("mood_admin_secret", newTeam.admin_secret);
+      
+      setTeamId(name);
+      setIsCreator(true);
+      if (hasSubmitted) fetchDashboardData();
+    } catch (err) {
+      console.error(err);
+      alert("Failed to create team. Please try again.");
+    }
+    setLoading(false);
   };
 
   if (loading && !hasSubmitted) {
@@ -272,13 +375,7 @@ export default function Home() {
         
         {!teamId ? (
           <TeamOnboarding 
-            onJoin={(id) => {
-              localStorage.setItem("mood_team_id", id);
-              localStorage.setItem("mood_is_creator", "true");
-              setTeamId(id);
-              setIsCreator(true);
-              if (hasSubmitted) fetchDashboardData();
-            }} 
+            onJoin={handleCreateTeam} 
             disabled={loading && !hasSubmitted} 
           />
         ) : !hasSubmitted ? (
@@ -364,6 +461,7 @@ export default function Home() {
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)} 
         currentTeam={teamId}
+        inviteCode={typeof window !== "undefined" ? localStorage.getItem("mood_invite_code") : null}
         onSave={handleSaveTeam}
       />
     </main>

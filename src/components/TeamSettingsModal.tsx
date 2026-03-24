@@ -7,10 +7,11 @@ type TeamSettingsModalProps = {
   isOpen: boolean;
   onClose: () => void;
   currentTeam: string | null;
-  onSave: (newTeam: string) => void;
+  inviteCode: string | null;
+  onSave: (newTeam: string) => Promise<void> | void;
 };
 
-export function TeamSettingsModal({ isOpen, onClose, currentTeam, onSave }: TeamSettingsModalProps) {
+export function TeamSettingsModal({ isOpen, onClose, currentTeam, inviteCode, onSave }: TeamSettingsModalProps) {
   const [teamName, setTeamName] = useState(currentTeam || "");
   const [copied, setCopied] = useState(false);
 
@@ -24,8 +25,8 @@ export function TeamSettingsModal({ isOpen, onClose, currentTeam, onSave }: Team
   if (!isOpen) return null;
 
   const handleCopyLink = async () => {
-    if (!currentTeam) return;
-    const url = `${window.location.origin}/?team=${encodeURIComponent(currentTeam)}`;
+    if (!inviteCode) return;
+    const url = `${window.location.origin}/?invite=${encodeURIComponent(inviteCode)}`;
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
@@ -35,10 +36,11 @@ export function TeamSettingsModal({ isOpen, onClose, currentTeam, onSave }: Team
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (teamName.trim()) {
-      onSave(teamName.trim());
+    if (teamName.trim() && teamName.trim() !== currentTeam) {
+      await onSave(teamName.trim());
+    } else {
       onClose();
     }
   };
@@ -74,7 +76,7 @@ export function TeamSettingsModal({ isOpen, onClose, currentTeam, onSave }: Team
           <div className="invite-link-area">
             <label className="input-label">Invite Teammates</label>
             <div className="invite-box">
-              <span className="invite-url">{window.location.origin}/?team={encodeURIComponent(currentTeam || "")}</span>
+              <span className="invite-url">{window.location.origin}/?invite={encodeURIComponent(inviteCode || "")}</span>
               <div style={{ position: 'relative' }}>
                 <button 
                   type="button" 
