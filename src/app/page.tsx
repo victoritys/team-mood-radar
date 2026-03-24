@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Settings, LogOut } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { TeamOnboarding } from "@/components/TeamOnboarding";
+import { TeamSettingsModal } from "@/components/TeamSettingsModal";
 import { MoodSelectionCard } from "@/components/MoodSelectionCard";
 import { TeamTemperatureBar } from "@/components/TeamTemperatureBar";
 import { TeamWeatherIndicator } from "@/components/TeamWeatherIndicator";
@@ -11,6 +14,9 @@ import { WeeklyMoodChart } from "@/components/WeeklyMoodChart";
 export default function Home() {
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [teamId, setTeamId] = useState<string | null>(null);
+  const [isCreator, setIsCreator] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   // Dashboard state
   const [stats, setStats] = useState({ good: 0, neutral: 0, bad: 0, total: 0 });
@@ -20,6 +26,28 @@ export default function Home() {
   const [userMood, setUserMood] = useState<number | null>(null);
 
   useEffect(() => {
+    // Check if user came from an invite link
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      const teamFromUrl = searchParams.get('team');
+      
+      if (teamFromUrl) {
+        localStorage.setItem("mood_team_id", teamFromUrl);
+        localStorage.setItem("mood_is_creator", "false");
+        setTeamId(teamFromUrl);
+        setIsCreator(false);
+        // Clean URL after joining so the query param doesn't linger
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } else {
+        const storedTeamId = localStorage.getItem("mood_team_id");
+        const storedIsCreator = localStorage.getItem("mood_is_creator");
+        if (storedTeamId) {
+          setTeamId(storedTeamId);
+          setIsCreator(storedIsCreator === "true");
+        }
+      }
+    }
+
     const sessionId = localStorage.getItem("mood_session_id");
     if (!sessionId) {
       localStorage.setItem("mood_session_id", Math.random().toString(36).substring(2, 15));
@@ -45,10 +73,17 @@ export default function Home() {
       const endOfDay = new Date(targetDate);
       endOfDay.setHours(23, 59, 59, 999);
 
+      const currentTeamId = typeof window !== 'undefined' ? localStorage.getItem("mood_team_id") : null;
+      if (!currentTeamId) {
+        setLoading(false);
+        return;
+      }
+
       // Fetch data for the specific day
       const { data: dayData, error: dayError } = await supabase
         .from("moods")
         .select("mood")
+        .eq("team_id", currentTeamId)
         .gte("created_at", startOfDay.toISOString())
         .lte("created_at", endOfDay.toISOString());
 
@@ -62,6 +97,7 @@ export default function Home() {
           .from("moods")
           .select("mood")
           .eq("session_id", sessionId)
+          .eq("team_id", currentTeamId)
           .gte("created_at", startOfDay.toISOString())
           .lte("created_at", endOfDay.toISOString())
           .order("created_at", { ascending: false })
@@ -99,6 +135,7 @@ export default function Home() {
       const { data: historyData, error: historyError } = await supabase
         .from("moods")
         .select("mood, created_at")
+        .eq("team_id", currentTeamId)
         .gte("created_at", weekStart.toISOString())
         .lte("created_at", weekEnd.toISOString())
         .order("created_at", { ascending: true });
@@ -132,7 +169,7 @@ export default function Home() {
 
       setHistory(weeklyHistoryData);
     } catch (err) {
-      console.error("Error fetching dashboard data:", err);
+      console.error("Error fetching dashboard data:", (err as any)?.message || JSON.stringify(err));
     } finally {
       // Small delay for smooth UI transition
       setTimeout(() => setLoading(false), 300);
@@ -157,11 +194,15 @@ export default function Home() {
 
     setLoading(true);
     try {
+      const currentTeamId = localStorage.getItem("mood_team_id");
       const sessionId = localStorage.getItem("mood_session_id");
+
+      if (!currentTeamId) return;
 
       const { error: dbError } = await supabase.from("moods").insert({
         session_id: sessionId,
-        mood: mood
+        mood: mood,
+        team_id: currentTeamId
       });
 
       if (dbError) throw dbError;
@@ -196,6 +237,20 @@ export default function Home() {
     fetchDashboardData(viewDate);
   };
 
+  const handleSaveTeam = (newTeam: string) => {
+    localStorage.setItem("mood_team_id", newTeam);
+    setTeamId(newTeam);
+    // Reload to guarantee all state/history drops its current team context
+    window.location.reload();
+  };
+
+  const handleLeaveTeam = () => {
+    localStorage.removeItem("mood_team_id");
+    localStorage.removeItem("mood_is_creator");
+    setTeamId(null);
+    setIsCreator(false);
+  };
+
   if (loading && !hasSubmitted) {
     return (
       <main>
@@ -215,40 +270,77 @@ export default function Home() {
     <main>
       <div className="container">
         
-        {!hasSubmitted ? (
+        {!teamId ? (
+          <TeamOnboarding 
+            onJoin={(id) => {
+              localStorage.setItem("mood_team_id", id);
+              localStorage.setItem("mood_is_creator", "true");
+              setTeamId(id);
+              setIsCreator(true);
+              if (hasSubmitted) fetchDashboardData();
+            }} 
+            disabled={loading && !hasSubmitted} 
+          />
+        ) : !hasSubmitted ? (
           <MoodSelectionCard 
             onSelect={handleMoodSelect} 
             onDateSelect={handleDateSelect}
             disabled={loading} 
             selectedMood={userMood}
             activeDate={viewDate}
+            teamName={teamId || undefined}
+            onChangeTeam={isCreator ? () => setIsSettingsOpen(true) : undefined}
+            onLeaveTeam={handleLeaveTeam}
           />
         ) : (
           <div className="dashboard-layout fade-in">
              <header className="dashboard-header">
               <div className="title-area">
-                <h1>Hello, Team!</h1>
+                <h1>{teamId} Dashboard</h1>
                 <p>Let's make this day productive</p>
               </div>
               <div className="header-actions">
                 <div className="date-label">{todayDate}</div>
-                <button 
-                  onClick={handleReset} 
-                  className="reset-btn"
-                  disabled={loading}
-                  title="Go back"
-                >
-                  {loading ? "..." : (
-                    <>
-                      <span className="btn-text">Check-in</span>
-                      <span className="btn-icon">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M19 12H5M12 19l-7-7 7-7"/>
-                        </svg>
-                      </span>
-                    </>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button 
+                    onClick={handleReset} 
+                    className="reset-btn"
+                    disabled={loading}
+                    title="Go back"
+                    style={{ padding: '0.5rem 1rem' }}
+                  >
+                    {loading ? "..." : (
+                      <>
+                        <span className="btn-text">Check-in</span>
+                        <span className="btn-icon">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M19 12H5M12 19l-7-7 7-7"/>
+                          </svg>
+                        </span>
+                      </>
+                    )}
+                  </button>
+                  {isCreator && (
+                    <button 
+                      onClick={() => setIsSettingsOpen(true)} 
+                      className="reset-btn"
+                      disabled={loading}
+                      title="Team Settings"
+                      style={{ width: '36px', height: '36px', padding: 0, display: 'flex', justifyContent: 'center' }}
+                    >
+                      <Settings size={18} />
+                    </button>
                   )}
-                </button>
+                  <button 
+                    onClick={handleLeaveTeam} 
+                    className="reset-btn"
+                    disabled={loading}
+                    title="Leave Team"
+                    style={{ width: '36px', height: '36px', padding: 0, display: 'flex', justifyContent: 'center' }}
+                  >
+                    <LogOut size={18} />
+                  </button>
+                </div>
               </div>
             </header>
 
@@ -268,7 +360,12 @@ export default function Home() {
         )}
       </div>
 
-      
+      <TeamSettingsModal 
+        isOpen={isSettingsOpen} 
+        onClose={() => setIsSettingsOpen(false)} 
+        currentTeam={teamId}
+        onSave={handleSaveTeam}
+      />
     </main>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { Settings, LogOut } from "lucide-react";
 import { EmojiMoodButtons } from "./EmojiMoodButtons";
 import { HorizontalCalendar } from "./HorizontalCalendar";
 
@@ -10,9 +11,12 @@ type MoodSelectionCardProps = {
   disabled?: boolean;
   selectedMood?: number | null;
   activeDate?: Date;
+  teamName?: string;
+  onChangeTeam?: () => void;
+  onLeaveTeam?: () => void;
 };
 
-export function MoodSelectionCard({ onSelect, onDateSelect, disabled, selectedMood, activeDate }: MoodSelectionCardProps) {
+export function MoodSelectionCard({ onSelect, onDateSelect, disabled, selectedMood, activeDate, teamName, onChangeTeam, onLeaveTeam }: MoodSelectionCardProps) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const launchDate = new Date('2026-03-16');
@@ -26,8 +30,20 @@ export function MoodSelectionCard({ onSelect, onDateSelect, disabled, selectedMo
     <div className="saas-card selection-card fade-in">
       <div className="header-flex">
         <div>
-          <h1 className="title">{isToday ? "Daily Check-in" : `Reviewing ${displayDate}`}</h1>
+          <h1 className="title">{teamName ? `${teamName} Check-in` : isToday ? "Daily Check-in" : `Reviewing ${displayDate}`}</h1>
           <p className="subtitle">{isToday ? "Let's make this day productive" : `Mood radar for ${displayDate}`}</p>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {onChangeTeam && (
+            <button onClick={onChangeTeam} className="icon-btn" disabled={disabled} title="Team Settings">
+              <Settings size={20} />
+            </button>
+          )}
+          {onLeaveTeam && (
+            <button onClick={onLeaveTeam} className="icon-btn" disabled={disabled} title="Leave Team">
+              <LogOut size={20} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -89,7 +105,7 @@ export function MoodSelectionCard({ onSelect, onDateSelect, disabled, selectedMo
           width: 36px;
           height: 36px;
           border-radius: 50%;
-          background: rgba(255, 255, 255, 0.1); /* Dark theme */
+          background: rgba(255, 255, 255, 0.1);
           border: 1px solid rgba(255, 255, 255, 0.05);
           color: white;
           font-size: 1.25rem;

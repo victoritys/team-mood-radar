@@ -331,14 +331,16 @@ main {
           .dashboard-header {
             flex-direction: column;
             align-items: flex-start;
-            gap: 1.5rem;
-            position: relative;
+            gap: 1rem;
+          }
+
+          .header-actions {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
           }
 
           .reset-btn {
-            position: absolute;
-            top: 0;
-            right: 0;
             width: 36px;
             height: 36px;
             padding: 0;
